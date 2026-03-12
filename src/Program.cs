@@ -254,7 +254,7 @@ namespace SmbiosFix
                 "enc-serial"         => (SmbiosType.SystemEnclosure,      SmbiosFieldOffsets.EnclosureSerial),
                 "bios-vendor"        => (SmbiosType.BiosInformation,      SmbiosFieldOffsets.BiosVendor),
                 "bios-version"       => (SmbiosType.BiosInformation,      SmbiosFieldOffsets.BiosVersion),
-                _                    => (0, -1)
+                _                    => ((SmbiosType)0, -1)
             };
 
             if (offset == -1)
