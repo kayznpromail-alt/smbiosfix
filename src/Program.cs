@@ -34,19 +34,35 @@ namespace SmbiosFix
             Console.WriteLine("Usage: SmbiosFix.exe <command> [options]");
             Console.WriteLine();
             Console.WriteLine("Commands:");
-            Console.WriteLine("  scan               Scan SMBIOS and report suspicious values");
-            Console.WriteLine("  backup <file>      Save current firmware SMBIOS to a JSON backup file");
-            Console.WriteLine("  restore <file>     Restore the registry SMBIOS cache from a backup file");
-            Console.WriteLine("  compare <file>     Compare firmware SMBIOS vs a saved backup");
+            Console.WriteLine("  scan               Scan SMBIOS and report suspicious/spoofed values");
+            Console.WriteLine("  fix                Copy firmware SMBIOS to registry (fastest fix)");
             Console.WriteLine("  dump               Print all SMBIOS fields (raw, no analysis)");
+            Console.WriteLine("  set <field> <val>  Manually write a specific SMBIOS field");
+            Console.WriteLine("  backup <file>      Save firmware SMBIOS to a JSON backup file");
+            Console.WriteLine("  restore <file>     Restore the registry SMBIOS cache from a backup");
+            Console.WriteLine("  compare <file>     Compare current firmware SMBIOS vs a backup");
+            Console.WriteLine();
+            Console.WriteLine("Fields for 'set' command:");
+            Console.WriteLine("  sys-manufacturer   sys-product   sys-serial   sys-sku   sys-family");
+            Console.WriteLine("  board-manufacturer board-product board-serial board-assettag");
+            Console.WriteLine("  enc-serial         bios-vendor   bios-version");
             Console.WriteLine();
             Console.WriteLine("Examples:");
             Console.WriteLine("  SmbiosFix.exe scan");
+            Console.WriteLine("  SmbiosFix.exe fix");
+            Console.WriteLine("  SmbiosFix.exe set sys-manufacturer \"Gigabyte Technology Co., Ltd.\"");
+            Console.WriteLine("  SmbiosFix.exe set board-product \"B550 AORUS ELITE\"");
+            Console.WriteLine("  SmbiosFix.exe set sys-serial \"ABC123XYZ\"");
             Console.WriteLine("  SmbiosFix.exe backup C:\\smbios_backup.json");
             Console.WriteLine("  SmbiosFix.exe restore C:\\smbios_backup.json");
-            Console.WriteLine("  SmbiosFix.exe compare C:\\smbios_backup.json");
             Console.WriteLine();
-            Console.WriteLine("NOTE: Run as Administrator for full functionality.");
+            Console.WriteLine("Typical workflow:");
+            Console.WriteLine("  1. SmbiosFix.exe scan       --> see what's wrong");
+            Console.WriteLine("  2. SmbiosFix.exe fix        --> auto-fix from firmware (90% of cases)");
+            Console.WriteLine("  3. Reboot");
+            Console.WriteLine("  4. If firmware also spoofed: use 'set' to manually correct each field");
+            Console.WriteLine();
+            Console.WriteLine("NOTE: Always run as Administrator.");
         }
 
         static int Main(string[] args)
@@ -85,8 +101,20 @@ namespace SmbiosFix
                 case "scan":
                     return CmdScan(firmwareData, registryData);
 
+                case "fix":
+                    return CmdFix(rawFirmware, firmwareData, registryData);
+
                 case "dump":
                     return CmdDump(firmwareData);
+
+                case "set":
+                    if (args.Length < 3)
+                    {
+                        ColoredLine("[ERROR] set requires: set <field> <value>", ConsoleColor.Red);
+                        ColoredLine("        Example: set sys-manufacturer \"Gigabyte Technology Co., Ltd.\"", ConsoleColor.Yellow);
+                        return 1;
+                    }
+                    return CmdSet(args[1], args[2]);
 
                 case "backup":
                     if (args.Length < 2)
@@ -123,6 +151,142 @@ namespace SmbiosFix
         // -----------------------------------------------------------------------
         // Commands
         // -----------------------------------------------------------------------
+
+        // -----------------------------------------------------------------------
+        // fix – copy firmware SMBIOS directly to registry cache
+        // -----------------------------------------------------------------------
+
+        private static int CmdFix(byte[]? rawFirmware, SmbiosData? firmwareData, SmbiosData? registryData)
+        {
+            ColoredLine("[*] SmbiosFix – Auto Fix Mode", ConsoleColor.Gray);
+            Console.WriteLine();
+
+            if (rawFirmware == null || firmwareData == null)
+            {
+                ColoredLine("[ERROR] Cannot read firmware SMBIOS. Run as Administrator.", ConsoleColor.Red);
+                return 1;
+            }
+
+            // Show what we're about to restore
+            ColoredLine("Firmware values (will be written to registry):", ConsoleColor.Gray);
+            if (firmwareData.System != null)
+            {
+                Console.WriteLine($"  Manufacturer : {firmwareData.System.Manufacturer}");
+                Console.WriteLine($"  Product      : {firmwareData.System.ProductName}");
+                Console.WriteLine($"  Serial       : {firmwareData.System.SerialNumber}");
+                Console.WriteLine($"  UUID         : {firmwareData.System.Uuid}");
+            }
+            if (firmwareData.Baseboard != null)
+            {
+                Console.WriteLine($"  Board Mfr    : {firmwareData.Baseboard.Manufacturer}");
+                Console.WriteLine($"  Board Product: {firmwareData.Baseboard.Product}");
+                Console.WriteLine($"  Board Serial : {firmwareData.Baseboard.SerialNumber}");
+            }
+            Console.WriteLine();
+
+            // Check if there's even a difference
+            bool mismatch = false;
+            if (registryData?.System != null && firmwareData.System != null)
+            {
+                var f = firmwareData.System;
+                var r = registryData.System;
+                mismatch = f.SerialNumber != r.SerialNumber
+                        || f.Uuid         != r.Uuid
+                        || f.Manufacturer != r.Manufacturer
+                        || f.ProductName  != r.ProductName;
+            }
+
+            if (!mismatch)
+            {
+                ColoredLine("[OK] Registry cache already matches firmware. No fix needed.", ConsoleColor.Green);
+                ColoredLine("     If values still look wrong in msinfo32, the spoofer uses a kernel driver.", ConsoleColor.Yellow);
+                ColoredLine("     Uninstall/disable the spoofer driver and reboot.", ConsoleColor.Yellow);
+                return 0;
+            }
+
+            ColoredLine("[!] Registry cache differs from firmware – a spoofer modified it.", ConsoleColor.Red);
+            Console.Write("Apply firmware values to registry cache? [y/N] ");
+            string? answer = Console.ReadLine();
+            if (!string.Equals(answer?.Trim(), "y", StringComparison.OrdinalIgnoreCase))
+            {
+                ColoredLine("Aborted.", ConsoleColor.Yellow);
+                return 0;
+            }
+
+            try
+            {
+                SmbiosWriter.CopyFirmwareToRegistry(rawFirmware);
+                ColoredLine("[OK] Registry cache restored from firmware.", ConsoleColor.Green);
+                ColoredLine("     Please REBOOT for changes to appear in msinfo32 / WMI.", ConsoleColor.Yellow);
+                return 0;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                ColoredLine($"[ERROR] Access denied: {ex.Message}", ConsoleColor.Red);
+                ColoredLine("        Run SmbiosFix as Administrator.", ConsoleColor.Yellow);
+                return 1;
+            }
+            catch (Exception ex)
+            {
+                ColoredLine($"[ERROR] {ex.Message}", ConsoleColor.Red);
+                return 1;
+            }
+        }
+
+        // -----------------------------------------------------------------------
+        // set – manually patch one SMBIOS field in the registry cache
+        // -----------------------------------------------------------------------
+
+        private static int CmdSet(string field, string value)
+        {
+            // Map field name → (structure type, byte offset)
+            (SmbiosType type, int offset) = field.ToLowerInvariant() switch
+            {
+                "sys-manufacturer"   => (SmbiosType.SystemInformation,    SmbiosFieldOffsets.SystemManufacturer),
+                "sys-product"        => (SmbiosType.SystemInformation,    SmbiosFieldOffsets.SystemProductName),
+                "sys-serial"         => (SmbiosType.SystemInformation,    SmbiosFieldOffsets.SystemSerial),
+                "sys-sku"            => (SmbiosType.SystemInformation,    SmbiosFieldOffsets.SystemSKU),
+                "sys-family"         => (SmbiosType.SystemInformation,    SmbiosFieldOffsets.SystemFamily),
+                "board-manufacturer" => (SmbiosType.BaseboardInformation, SmbiosFieldOffsets.BaseboardManufacturer),
+                "board-product"      => (SmbiosType.BaseboardInformation, SmbiosFieldOffsets.BaseboardProduct),
+                "board-serial"       => (SmbiosType.BaseboardInformation, SmbiosFieldOffsets.BaseboardSerial),
+                "board-assettag"     => (SmbiosType.BaseboardInformation, SmbiosFieldOffsets.BaseboardAssetTag),
+                "enc-serial"         => (SmbiosType.SystemEnclosure,      SmbiosFieldOffsets.EnclosureSerial),
+                "bios-vendor"        => (SmbiosType.BiosInformation,      SmbiosFieldOffsets.BiosVendor),
+                "bios-version"       => (SmbiosType.BiosInformation,      SmbiosFieldOffsets.BiosVersion),
+                _                    => (0, -1)
+            };
+
+            if (offset == -1)
+            {
+                ColoredLine($"[ERROR] Unknown field: '{field}'", ConsoleColor.Red);
+                Console.WriteLine("        Valid fields: sys-manufacturer, sys-product, sys-serial,");
+                Console.WriteLine("          sys-sku, sys-family, board-manufacturer, board-product,");
+                Console.WriteLine("          board-serial, board-assettag, enc-serial, bios-vendor, bios-version");
+                return 1;
+            }
+
+            ColoredLine($"[*] Setting {field} = \"{value}\"", ConsoleColor.Gray);
+
+            try
+            {
+                SmbiosWriter.PatchField(type, offset, value);
+                ColoredLine($"[OK] {field} written to registry cache.", ConsoleColor.Green);
+                ColoredLine("     Please REBOOT for changes to appear in msinfo32 / WMI.", ConsoleColor.Yellow);
+                return 0;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                ColoredLine($"[ERROR] Access denied: {ex.Message}", ConsoleColor.Red);
+                ColoredLine("        Run SmbiosFix as Administrator.", ConsoleColor.Yellow);
+                return 1;
+            }
+            catch (Exception ex)
+            {
+                ColoredLine($"[ERROR] {ex.Message}", ConsoleColor.Red);
+                return 1;
+            }
+        }
 
         private static int CmdScan(SmbiosData? firmwareData, SmbiosData? registryData)
         {
