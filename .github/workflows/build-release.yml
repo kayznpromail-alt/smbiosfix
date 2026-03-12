@@ -1,0 +1,59 @@
+name: Build & Release SmbiosFix
+
+on:
+  push:
+    tags:
+      - 'v*'          # déclenché par un tag genre v1.0, v1.1, etc.
+  workflow_dispatch:  # ou manuellement depuis GitHub Actions
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build – self-contained exe (no .NET required on target PC)
+        run: |
+          dotnet publish SmbiosFix.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -o publish\
+
+      - name: Copy deploy scripts
+        run: |
+          copy deploy\fix_smbios.bat publish\fix_smbios.bat
+          copy deploy\fix_smbios_manual.bat publish\fix_smbios_manual.bat
+
+      - name: Create ZIP
+        run: |
+          Compress-Archive -Path publish\* -DestinationPath SmbiosFix-${{ github.ref_name }}.zip
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: SmbiosFix-${{ github.ref_name }}.zip
+          name: SmbiosFix ${{ github.ref_name }}
+          body: |
+            ## SmbiosFix ${{ github.ref_name }}
+
+            ### Contenu du ZIP
+            - `SmbiosFix.exe` – outil principal (pas besoin d'installer .NET)
+            - `fix_smbios.bat` – fix automatique (lancer en Admin)
+            - `fix_smbios_manual.bat` – fix manuel champ par champ
+
+            ### Utilisation rapide
+            1. Extraire le ZIP
+            2. Lancer `fix_smbios.bat` en **Administrateur**
+            3. Redémarrer le PC
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
