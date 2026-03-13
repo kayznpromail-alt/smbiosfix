@@ -96,10 +96,13 @@ namespace SmbiosFix
                 // Registry SMBiosData has no firmware header – it IS the raw table
                 registryData = SmbiosReader.Parse(rawRegistry, hasFirmwareHeader: false);
 
+            // WMI data (what msinfo32 actually sees – may differ if kernel spoofer active)
+            WmiData? wmiData = SmbiosWmiReader.Read();
+
             switch (command)
             {
                 case "scan":
-                    return CmdScan(firmwareData, registryData);
+                    return CmdScan(firmwareData, registryData, wmiData);
 
                 case "fix":
                     return CmdFix(rawFirmware, firmwareData, registryData);
@@ -288,7 +291,7 @@ namespace SmbiosFix
             }
         }
 
-        private static int CmdScan(SmbiosData? firmwareData, SmbiosData? registryData)
+        private static int CmdScan(SmbiosData? firmwareData, SmbiosData? registryData, WmiData? wmiData)
         {
             ColoredLine("[*] Reading SMBIOS tables...", ConsoleColor.Gray);
 
@@ -365,6 +368,44 @@ namespace SmbiosFix
                     ColoredLine("    ✗  SMBIOS contains clearly spoofed/corrupted values!", ConsoleColor.Red);
                     ColoredLine("       Use 'restore' to fix from a clean backup.", ConsoleColor.Yellow);
                     break;
+            }
+
+            Console.WriteLine();
+
+            // ------------------------------------------------------------------
+            // Kernel spoofer detection: compare firmware vs WMI
+            // ------------------------------------------------------------------
+            ColoredLine("─── Kernel Spoofer Analysis ─────────────────────────────", ConsoleColor.DarkGray);
+            var kernelResult = SpoofDetector.AnalyseKernelSpoof(firmwareData, wmiData);
+
+            if (kernelResult.WmiUnavailable)
+            {
+                ColoredLine("    [?] Could not query WMI (wmic.exe unavailable or failed).", ConsoleColor.Yellow);
+                ColoredLine("        Cannot determine if a kernel-level spoofer is active.", ConsoleColor.Yellow);
+            }
+            else if (kernelResult.KernelSpoofDetected)
+            {
+                ColoredLine("    [!!!] KERNEL SPOOFER DETECTED", ConsoleColor.Red);
+                ColoredLine("          A driver is intercepting WMI queries in real time.", ConsoleColor.Red);
+                Console.WriteLine();
+                ColoredLine("    Field                    Firmware (real)          WMI (what apps see)", ConsoleColor.DarkGray);
+                ColoredLine("    ─────────────────────────────────────────────────────────────────────", ConsoleColor.DarkGray);
+                foreach (var (field, firmware, wmi) in kernelResult.Differences)
+                {
+                    Console.Write("    ");
+                    Colored($"{field,-24} ", ConsoleColor.White);
+                    Colored($"{firmware,-24} ", ConsoleColor.Green);
+                    Colored("→  ", ConsoleColor.DarkGray);
+                    ColoredLine(wmi, ConsoleColor.Red);
+                }
+                Console.WriteLine();
+                ColoredLine("    Fix: Uninstall the spoofer software and reboot.", ConsoleColor.Yellow);
+                ColoredLine("         If values persist after reboot, the BIOS firmware itself was flashed.", ConsoleColor.Yellow);
+                ColoredLine("         In that case: re-flash your BIOS from the manufacturer's website.", ConsoleColor.Yellow);
+            }
+            else
+            {
+                ColoredLine("    ✓  WMI values match firmware. No kernel-level spoofer detected.", ConsoleColor.Green);
             }
 
             Console.WriteLine();

@@ -145,6 +145,21 @@ namespace SmbiosFix
     }
 
     /// <summary>
+    /// SMBIOS values as reported by WMI (what msinfo32 and applications actually see).
+    /// If these differ from firmware values, a kernel-mode spoofer is intercepting queries.
+    /// </summary>
+    public class WmiData
+    {
+        public string? SysManufacturer   { get; set; }
+        public string? SysProduct        { get; set; }
+        public string? BoardManufacturer { get; set; }
+        public string? BoardProduct      { get; set; }
+        public string? BoardSerial       { get; set; }
+        public string? BiosVendor        { get; set; }
+        public string? BiosVersion       { get; set; }
+    }
+
+    /// <summary>
     /// Container for all parsed SMBIOS data.
     /// </summary>
     public class SmbiosData

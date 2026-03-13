@@ -39,10 +39,63 @@ namespace SmbiosFix
     }
 
     /// <summary>
+    /// Result of comparing firmware SMBIOS values vs WMI-reported values.
+    /// If differences exist, a kernel-mode driver is intercepting WMI queries.
+    /// </summary>
+    public class KernelSpoofResult
+    {
+        public bool   KernelSpoofDetected { get; set; }
+        public bool   WmiUnavailable      { get; set; }
+        public List<(string Field, string Firmware, string Wmi)> Differences { get; } =
+            new List<(string, string, string)>();
+    }
+
+    /// <summary>
     /// Analyses parsed SMBIOS data and flags values that look corrupt or spoofed.
     /// </summary>
     public static class SpoofDetector
     {
+        // -----------------------------------------------------------------------
+        // Known legitimate OEM manufacturers
+        // If firmware reports a manufacturer NOT in this list, it may be a fake value
+        // -----------------------------------------------------------------------
+        private static readonly HashSet<string> KnownOemManufacturers =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "Gigabyte Technology Co., Ltd.",
+                "ASUSTeK Computer Inc.",
+                "ASUSTeK COMPUTER INC.",
+                "Micro-Star International Co., Ltd.",
+                "MSI",
+                "ASRock",
+                "ASRock Incorporation",
+                "Dell Inc.",
+                "HP",
+                "Hewlett-Packard",
+                "Lenovo",
+                "Acer",
+                "Acer Inc.",
+                "Apple Inc.",
+                "Intel Corporation",
+                "Intel(R) Client Systems",
+                "EVGA",
+                "Biostar",
+                "BIOSTAR Group",
+                "Supermicro",
+                "Toshiba",
+                "Sony Corporation",
+                "Samsung Electronics",
+                "Fujitsu",
+                "Panasonic",
+                "Alienware",
+                "Razer",
+                "Microsoft Corporation",
+                "Valve",
+                "HUAWEI",
+                "Xiaomi",
+                "Colorful",
+            };
+
         // -----------------------------------------------------------------------
         // Known-bad patterns produced by popular spoofers
         // -----------------------------------------------------------------------
@@ -147,6 +200,55 @@ namespace SmbiosFix
             return report;
         }
 
+        /// <summary>
+        /// Compares firmware SMBIOS values vs WMI-reported values.
+        /// If they differ, a kernel-mode driver is intercepting WMI queries in real time.
+        /// </summary>
+        public static KernelSpoofResult AnalyseKernelSpoof(SmbiosData? firmwareData, WmiData? wmiData)
+        {
+            var result = new KernelSpoofResult();
+
+            if (wmiData == null)
+            {
+                result.WmiUnavailable = true;
+                return result;
+            }
+
+            if (firmwareData == null)
+                return result;
+
+            void Compare(string field, string? firmware, string? wmi)
+            {
+                firmware = firmware?.Trim() ?? "";
+                wmi      = wmi?.Trim() ?? "";
+                if (!string.IsNullOrEmpty(firmware) && !string.IsNullOrEmpty(wmi) &&
+                    !string.Equals(firmware, wmi, StringComparison.OrdinalIgnoreCase))
+                {
+                    result.Differences.Add((field, firmware, wmi));
+                    result.KernelSpoofDetected = true;
+                }
+            }
+
+            if (firmwareData.System != null)
+            {
+                Compare("System Manufacturer", firmwareData.System.Manufacturer, wmiData.SysManufacturer);
+                Compare("System Product",      firmwareData.System.ProductName,  wmiData.SysProduct);
+            }
+            if (firmwareData.Baseboard != null)
+            {
+                Compare("Board Manufacturer", firmwareData.Baseboard.Manufacturer, wmiData.BoardManufacturer);
+                Compare("Board Product",      firmwareData.Baseboard.Product,      wmiData.BoardProduct);
+                Compare("Board Serial",       firmwareData.Baseboard.SerialNumber, wmiData.BoardSerial);
+            }
+            if (firmwareData.Bios != null)
+            {
+                Compare("BIOS Vendor",  firmwareData.Bios.Vendor,  wmiData.BiosVendor);
+                Compare("BIOS Version", firmwareData.Bios.Version, wmiData.BiosVersion);
+            }
+
+            return result;
+        }
+
         // -----------------------------------------------------------------------
         // Helpers
         // -----------------------------------------------------------------------
@@ -172,6 +274,14 @@ namespace SmbiosFix
             if (AllSameChar.IsMatch(value))
                 return new FieldResult(field, value, SuspicionLevel.Spoofed,
                     "Repeated character pattern – likely spoofed");
+
+            // For manufacturer fields: warn if not a known OEM (may indicate flashed firmware)
+            if (!allowOem && field.Contains("Manufacturer", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!KnownOemManufacturers.Contains(value.Trim()))
+                    return new FieldResult(field, value, SuspicionLevel.Suspicious,
+                        "Not a known OEM manufacturer – firmware may have been flashed with fake values");
+            }
 
             return new FieldResult(field, value, SuspicionLevel.Clean);
         }
