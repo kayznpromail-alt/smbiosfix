@@ -114,21 +114,29 @@ namespace SmbiosFix
 
                 var structure = new SmbiosStructure((SmbiosType)type, length, handle, formatted);
 
-                // Extract the variable-length string section after the formatted part
+                // Extract the variable-length string section after the formatted part.
+                // SMBIOS format: str1\0 str2\0 ... \0  (extra \0 terminates the section)
+                // No-strings case: \0\0
                 int strPos = pos + length;
-                // String section ends at double-null \0\0
-                while (strPos < tableEnd)
+                if (strPos < tableEnd && raw[strPos] == 0)
                 {
-                    if (strPos + 1 < tableEnd && raw[strPos] == 0 && raw[strPos + 1] == 0)
+                    strPos += 2; // no strings: skip \0\0
+                }
+                else
+                {
+                    while (strPos < tableEnd)
                     {
-                        strPos += 2; // skip the terminating double-null
-                        break;
+                        int strStart = strPos;
+                        while (strPos < tableEnd && raw[strPos] != 0) strPos++;
+                        structure.Strings.Add(Encoding.ASCII.GetString(raw, strStart, strPos - strStart));
+                        strPos++; // skip this string's \0
+                        // If the next byte is \0, it is the end-of-section marker
+                        if (strPos < tableEnd && raw[strPos] == 0)
+                        {
+                            strPos++; // skip end-of-section \0
+                            break;
+                        }
                     }
-                    // Find end of this string
-                    int strStart = strPos;
-                    while (strPos < tableEnd && raw[strPos] != 0) strPos++;
-                    structure.Strings.Add(Encoding.ASCII.GetString(raw, strStart, strPos - strStart));
-                    strPos++; // skip single null
                 }
 
                 result.AllStructures.Add(structure);
