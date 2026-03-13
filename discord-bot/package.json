@@ -1,0 +1,19 @@
+{
+  "name": "billgang-order-verifier",
+  "version": "1.0.0",
+  "description": "Discord bot to verify Billgang order IDs",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "deploy": "node deploy-commands.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.0",
+    "axios": "^1.7.0",
+    "better-sqlite3": "^9.4.0",
+    "dotenv": "^16.4.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
